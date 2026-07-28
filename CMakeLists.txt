@@ -6,8 +6,20 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# 获取跨平台的线程编译和链接选项。
+find_package(Threads REQUIRED)
+
 add_executable(logbridge
         src/main.cpp
+)
+
+# 添加项目头文件目录。
+target_include_directories(logbridge PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(logbridge PRIVATE
+        Threads::Threads
 )
 
 target_compile_options(logbridge PRIVATE
