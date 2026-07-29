@@ -10,6 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
 
 add_executable(logbridge
+        src/FileTailReader.cpp
         src/main.cpp
 )
 
@@ -27,3 +28,27 @@ target_compile_options(logbridge PRIVATE
         -Wextra
         -Wpedantic
 )
+
+include(CTest)
+
+if (BUILD_TESTING)
+    add_executable(file_tail_reader_tests
+            tests/FileTailReaderTest.cpp
+            src/FileTailReader.cpp
+    )
+
+    target_include_directories(file_tail_reader_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_compile_options(file_tail_reader_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    add_test(
+            NAME file_tail_reader
+            COMMAND file_tail_reader_tests
+    )
+endif ()

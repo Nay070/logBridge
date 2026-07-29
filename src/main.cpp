@@ -1,49 +1,88 @@
 #include "BoundedBlockingQueue.h"
+#include "FileTailReader.h"
+#include "LogMessage.h"
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <string>
 #include <thread>
+#include <utility>
 
-int main() {
-    // 容量为 3；生产快于消费，用于触发队列满时的阻塞。
-    BoundedBlockingQueue<int> queue(3);
+namespace {
 
-    // 模拟日志读取线程。
-    std::thread producer([&queue] {
-        for (int number = 1; number <= 50; ++number) {
-            if (!queue.push(number)) {
-                std::cout << "队列已关闭，生产者停止写入\n";
-                return;
+std::int64_t currentTimestampMs() {
+    const auto now = std::chrono::system_clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               now.time_since_epoch())
+        .count();
+}
+
+} // namespace
+
+int main(int argc, char* argv[]) {
+    const std::string logPath = argc > 1 ? argv[1] : "app.log";
+
+    if (!std::filesystem::exists(logPath)) {
+        std::cerr << "日志文件不存在：" << logPath << '\n'
+                  << "请先执行：touch " << logPath << '\n';
+        return 1;
+    }
+
+    BoundedBlockingQueue<LogMessage> queue(100);
+    std::atomic<bool> running{true};
+
+    // 生产者持续读取新增日志，并转成 LogMessage。
+    std::thread producer([&queue, &running, &logPath] {
+        try {
+            FileTailReader reader(logPath);
+            std::uint64_t nextId = 1;
+
+            while (running.load()) {
+                auto lines = reader.readNewLines();
+
+                for (auto& line : lines) {
+                    LogMessage message{
+                        .id = nextId++,
+                        .timestampMs = currentTimestampMs(),
+                        .source = reader.path(),
+                        .content = std::move(line),
+                    };
+
+                    if (!queue.push(std::move(message))) {
+                        return;
+                    }
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        } catch (const std::exception& exception) {
+            std::cerr << "日志读取失败：" << exception.what() << '\n';
         }
 
         queue.close();
     });
 
-    // 模拟网络发送线程。
+    // 消费者暂时打印消息，下一阶段再替换为网络发送。
     std::thread consumer([&queue] {
-        while (true) {
-            std::optional<int> value = queue.pop();
-
-            if (!value.has_value()) {
-                break;
-            }
-
-            std::cout << "消费者处理消息：" << *value << '\n';
-
-            // 消费较慢，故意制造队列满的情况。
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        while (auto message = queue.pop()) {
+            std::cout << '[' << message->id << "] "
+                      << message->timestampMs << ' '
+                      << message->source << " | "
+                      << message->content << '\n';
         }
-
-        std::cout << "队列已关闭，所有消息处理完毕\n";
     });
 
-    // 等待工作线程结束。
+    std::cout << "正在监听日志文件：" << logPath << '\n'
+              << "按 Enter 键停止 LogBridge\n";
+    std::cin.get();
+
+    running.store(false);
     producer.join();
     consumer.join();
 
-    std::cout << "LogBridge 队列测试完成\n";
+    std::cout << "LogBridge 已停止\n";
     return 0;
 }
