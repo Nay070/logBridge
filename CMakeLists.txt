@@ -11,6 +11,7 @@ find_package(Threads REQUIRED)
 
 add_executable(logbridge
         src/FileTailReader.cpp
+        src/Protocol.cpp
         src/main.cpp
 )
 
@@ -50,5 +51,25 @@ if (BUILD_TESTING)
     add_test(
             NAME file_tail_reader
             COMMAND file_tail_reader_tests
+    )
+
+    add_executable(protocol_tests
+            tests/ProtocolTest.cpp
+            src/Protocol.cpp
+    )
+
+    target_include_directories(protocol_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_compile_options(protocol_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    add_test(
+            NAME protocol
+            COMMAND protocol_tests
     )
 endif ()
