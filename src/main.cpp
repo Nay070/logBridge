@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
@@ -16,6 +17,9 @@
 #include <utility>
 
 namespace {
+
+constexpr std::size_t SendBatchSize = 10; // 每个网络批次最多包含的日志条数。
+constexpr std::chrono::milliseconds SendBatchMaxWait{100}; // 不足一批时的最长等待时间。
 
 // 返回当前系统时间距离 Unix 时间原点的毫秒数。
 std::int64_t currentTimestampMs() {
@@ -114,18 +118,26 @@ int main(int argc, char* argv[]) {
         queue.close();
     });
 
-    // 消费者把消息序列化后，通过已经建立的 TCP 连接发送。
-    // consumer 是负责取出队列消息并执行网络发送的后台线程。
+    // 消费者按“最多 10 条或等待 100ms”组批，发送后等待累计 ACK。
+    // consumer 是负责批量取出消息、网络发送和确认校验的后台线程。
     std::thread consumer([&queue, &running, &client] {
         try {
-            // message 保存本轮从阻塞队列中取出的一条日志。
-            while (auto message = queue.pop()) {
-                client->sendLogMessage(*message);
-                std::cout << "已发送日志：" << message->id << '\n';
+            while (true) {
+                auto batch = // 本轮按数量或等待时间组成的日志批次。
+                    queue.popBatch(SendBatchSize, SendBatchMaxWait);
+                if (batch.empty()) {
+                    break;
+                }
+
+                const std::uint64_t confirmedId = // 服务端实际返回的累计确认 ID。
+                    client->sendLogBatchAndWaitAck(batch);
+
+                std::cout << "批次已确认：" << batch.size()
+                          << " 条，最大消息 ID=" << confirmedId << '\n';
             }
-        // exception 保存序列化或 Socket 发送失败的原因。
+        // exception 保存组批、发送、接收 ACK 或确认校验失败的原因。
         } catch (const std::exception& exception) {
-            std::cerr << "日志发送失败：" << exception.what() << '\n';
+            std::cerr << "日志批量发送失败：" << exception.what() << '\n';
             running.store(false);
             queue.close();
         }

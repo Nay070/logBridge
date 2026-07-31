@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace logbridge {
 
@@ -27,6 +28,12 @@ public:
 
     // 接收并解析一条完整日志；客户端正常断开时返回 nullopt。
     std::optional<LogMessage> receiveLogMessage() const;
+
+    // 接收单日志帧或批次帧，并统一返回一个日志数组。
+    std::optional<std::vector<LogMessage>> receiveLogBatch() const;
+
+    // 向当前客户端发送累计确认 ID。
+    void sendAck(std::uint64_t confirmedId) const;
 
     // 返回服务端实际监听的端口号。
     [[nodiscard]] std::uint16_t port() const noexcept;

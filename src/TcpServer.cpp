@@ -1,12 +1,9 @@
 #include "TcpServer.h"
 
 #include "Protocol.h"
+#include "SocketIO.h"
 
-#include <algorithm>
-#include <array>
 #include <cerrno>
-#include <cstddef>
-#include <span>
 #include <stdexcept>
 #include <system_error>
 #include <arpa/inet.h>
@@ -16,44 +13,6 @@
 
 namespace logbridge {
 namespace {
-
-// 从 socketFd 循环读取数据，直到填满 output。
-// 返回 false 表示对端在本次读取任何字节前正常关闭了连接。
-bool receiveExact(int socketFd, std::span<std::uint8_t> output) {
-    std::size_t receivedBytes = 0; // 记录当前已经放入 output 的字节数。
-
-    // TCP 是字节流，recv() 一次不保证得到完整帧。
-    while (receivedBytes < output.size()) {
-        // result 是本次 recv() 收到的字节数，0 表示对端正常关闭。
-        const ssize_t result = ::recv(
-            socketFd,
-            output.data() + receivedBytes,
-            output.size() - receivedBytes,
-            0);
-
-        if (result > 0) {
-            receivedBytes += static_cast<std::size_t>(result);
-            continue;
-        }
-
-        if (result == 0) {
-            if (receivedBytes == 0) {
-                return false;
-            }
-            throw std::runtime_error(
-                "connection closed in the middle of a frame");
-        }
-
-        if (errno == EINTR) {
-            continue;
-        }
-
-        throw std::system_error(
-            errno, std::generic_category(), "cannot receive log frame");
-    }
-
-    return true;
-}
 
 // 关闭 socketFd 并将它重置为 -1；无效描述符会被直接忽略。
 void closeSocket(int& socketFd) noexcept {
@@ -143,37 +102,54 @@ void TcpServer::acceptClient() {
     }
 }
 
-// 先读取固定帧头，再按头部声明的长度读取 Payload 并反序列化。
+// 接收一个单日志协议帧并反序列化。
 std::optional<LogMessage> TcpServer::receiveLogMessage() const {
     if (clientFd_ < 0) {
         throw std::logic_error("no client has been accepted");
     }
 
-    // headerBytes 保存从 TCP 流中读取的固定 12 字节帧头。
-    std::array<std::uint8_t, protocol::FrameHeaderSize> headerBytes{};
-    if (!receiveExact(clientFd_, headerBytes)) {
+    const auto frame = net::receiveFrame(clientFd_); // 客户端发送的完整协议帧。
+    if (!frame) {
+        return std::nullopt;
+    }
+    return protocol::deserializeLogMessage(*frame);
+}
+
+// 同时兼容旧的单日志帧和新的批次帧。
+std::optional<std::vector<LogMessage>>
+TcpServer::receiveLogBatch() const {
+    if (clientFd_ < 0) {
+        throw std::logic_error("no client has been accepted");
+    }
+
+    const auto frame = net::receiveFrame(clientFd_); // 客户端发送的完整协议帧。
+    if (!frame) {
         return std::nullopt;
     }
 
-    // 先读取固定帧头，再根据其中的长度读取恰好一个 Payload。
-    // header 保存解析后的版本、消息类型和 Payload 长度。
-    const protocol::FrameHeader header =
-        protocol::parseFrameHeader(headerBytes);
-    // frame 为帧头和 Payload 预留空间，最终保存一帧完整数据。
-    protocol::ByteBuffer frame(
-        protocol::FrameHeaderSize + header.payloadLength);
-    std::copy(headerBytes.begin(), headerBytes.end(), frame.begin());
-
-    // payload 是 frame 中帧头之后的可写区域，不拥有独立内存。
-    std::span<std::uint8_t> payload(
-        frame.data() + protocol::FrameHeaderSize,
-        header.payloadLength);
-    if (!receiveExact(clientFd_, payload)) {
-        throw std::runtime_error(
-            "connection closed before the frame payload");
+    const protocol::FrameHeader header = // 用于判断当前是单条还是批次消息。
+        protocol::parseFrameHeader(*frame);
+    if (header.type == protocol::MessageType::Log) {
+        std::vector<LogMessage> messages; // 将单条日志包装成统一的数组结果。
+        messages.push_back(protocol::deserializeLogMessage(*frame));
+        return messages;
+    }
+    if (header.type == protocol::MessageType::LogBatch) {
+        return protocol::deserializeLogBatch(*frame);
     }
 
-    return protocol::deserializeLogMessage(frame);
+    throw protocol::ProtocolError("expected log or log batch frame");
+}
+
+// 将服务端已经处理到的最大消息 ID 返回给客户端。
+void TcpServer::sendAck(std::uint64_t confirmedId) const {
+    if (clientFd_ < 0) {
+        throw std::logic_error("no client has been accepted");
+    }
+
+    const protocol::ByteBuffer frame = // confirmedId 对应的完整 ACK 帧。
+        protocol::serializeAck(confirmedId);
+    net::sendAll(clientFd_, frame);
 }
 
 // 返回 bind 后的实际端口；测试使用端口 0 时也能取得系统分配值。

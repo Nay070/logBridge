@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -7,6 +8,7 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 // 线程安全的有界阻塞队列。
 // T 表示队列中保存的元素类型；队列满时生产者等待，队列空时消费者等待。
@@ -71,6 +73,64 @@ public:
         lock.unlock();
         notFull_.notify_one();
         return value;
+    }
+
+    // 先阻塞取得第一项，再等待最多 maxWait 以凑齐 maxItems 个元素。
+    // 队列关闭且数据取完后返回空数组。
+    std::vector<T> popBatch(
+        std::size_t maxItems,
+        std::chrono::milliseconds maxWait) {
+        if (maxItems == 0) {
+            throw std::invalid_argument(
+                "batch size must be greater than zero");
+        }
+        if (maxWait.count() < 0) {
+            throw std::invalid_argument(
+                "batch wait time cannot be negative");
+        }
+
+        std::unique_lock lock(mutex_); // 批量移动队列元素期间持有的互斥锁。
+        notEmpty_.wait(lock, [this] {
+            return !queue_.empty() || closed_;
+        });
+
+        std::vector<T> batch; // 保存本次从队列中取得的一批元素。
+        batch.reserve(maxItems);
+        if (queue_.empty()) {
+            return batch;
+        }
+
+        batch.push_back(std::move(queue_.front()));
+        queue_.pop_front();
+
+        const auto deadline = // 从取得第一项开始计算本批次的最晚返回时间。
+            std::chrono::steady_clock::now() + maxWait;
+
+        while (batch.size() < maxItems) {
+            if (queue_.empty() && !closed_) {
+                // ready 表示截止时间前出现了新元素，或者队列已经关闭。
+                const bool ready = notEmpty_.wait_until(
+                    lock,
+                    deadline,
+                    [this] {
+                        return !queue_.empty() || closed_;
+                    });
+                if (!ready) {
+                    break;
+                }
+            }
+
+            if (queue_.empty()) {
+                break;
+            }
+
+            batch.push_back(std::move(queue_.front()));
+            queue_.pop_front();
+        }
+
+        lock.unlock();
+        notFull_.notify_all();
+        return batch;
     }
 
     // 关闭队列，不再接收新元素，并唤醒所有正在等待的线程。

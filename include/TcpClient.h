@@ -3,6 +3,7 @@
 #include "LogMessage.h"
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace logbridge {
@@ -24,6 +25,16 @@ public:
 
     // 将 message 序列化并完整发送到已经连接的服务端。
     void sendLogMessage(const LogMessage& message) const;
+
+    // 将多条日志合并为一个批次协议帧并发送。
+    void sendLogBatch(std::span<const LogMessage> messages) const;
+
+    // 阻塞等待服务端 ACK，并返回其中的累计确认 ID。
+    std::uint64_t receiveAck() const;
+
+    // 发送整个批次并校验 ACK 必须等于批次最后一个消息 ID。
+    std::uint64_t sendLogBatchAndWaitAck(
+        std::span<const LogMessage> messages) const;
 
 private:
     int socketFd_{-1}; // 与服务端通信的 Socket 文件描述符，-1 表示无效。

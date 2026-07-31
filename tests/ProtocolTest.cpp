@@ -88,6 +88,70 @@ void testHeaderEncoding() {
             "payload length mismatch");
 }
 
+// 验证多条日志可以封装进一个批次帧并按原顺序恢复。
+void testBatchRoundTrip() {
+    const std::vector<LogMessage> original{ // 准备放入同一批次的三条日志。
+        LogMessage{
+            .id = 10,
+            .timestampMs = 100,
+            .source = "app.log",
+            .content = "第一条",
+        },
+        LogMessage{
+            .id = 11,
+            .timestampMs = 101,
+            .source = "app.log",
+            .content = "second",
+        },
+        LogMessage{
+            .id = 12,
+            .timestampMs = 102,
+            .source = "worker.log",
+            .content = "third",
+        },
+    };
+
+    const ByteBuffer frame = // original 编码后的完整批次帧。
+        logbridge::protocol::serializeLogBatch(original);
+    const auto header = // 用于确认批次消息类型的帧头。
+        logbridge::protocol::parseFrameHeader(frame);
+    const std::vector<LogMessage> restored = // 从批次帧恢复出的日志。
+        logbridge::protocol::deserializeLogBatch(frame);
+
+    require(header.type == logbridge::protocol::MessageType::LogBatch,
+            "batch frame type mismatch");
+    require(restored.size() == original.size(),
+            "batch message count mismatch");
+    for (std::size_t index = 0; index < original.size(); ++index) {
+        require(restored[index].id == original[index].id,
+                "batch message id mismatch");
+        require(restored[index].timestampMs == original[index].timestampMs,
+                "batch timestamp mismatch");
+        require(restored[index].source == original[index].source,
+                "batch source mismatch");
+        require(restored[index].content == original[index].content,
+                "batch content mismatch");
+    }
+}
+
+// 验证累计确认 ID 可以经过 ACK 帧往返而保持不变。
+void testAckRoundTrip() {
+    constexpr std::uint64_t ConfirmedId = 9876; // 服务端准备确认的最大消息 ID。
+    const ByteBuffer frame = // ConfirmedId 编码后的 ACK 帧。
+        logbridge::protocol::serializeAck(ConfirmedId);
+    const auto header = // ACK 帧解析出的固定头部。
+        logbridge::protocol::parseFrameHeader(frame);
+    const auto ack = // 从 ACK Payload 中恢复出的确认消息。
+        logbridge::protocol::deserializeAck(frame);
+
+    require(header.type == logbridge::protocol::MessageType::Ack,
+            "ack frame type mismatch");
+    require(header.payloadLength == 8,
+            "ack payload length mismatch");
+    require(ack.confirmedId == ConfirmedId,
+            "ack confirmed id mismatch");
+}
+
 // 分别篡改或截断合法帧，验证协议层会拒绝异常数据。
 void testInvalidFrames() {
     // message 是生成后续各种异常测试帧的基础日志。
@@ -181,6 +245,23 @@ void testLengthLimits() {
             logbridge::protocol::serializeLogMessage(oversizedContent);
         },
         "oversized content should be rejected");
+
+    const std::vector<LogMessage> oversizedBatch( // 比批次数量上限多一条。
+        logbridge::protocol::MaxBatchMessageCount + 1);
+    requireProtocolError(
+        [&] {
+            // 该 Lambda 尝试序列化包含过多日志的批次。
+            logbridge::protocol::serializeLogBatch(oversizedBatch);
+        },
+        "oversized batch should be rejected");
+
+    const std::vector<LogMessage> emptyBatch; // 不含任何日志的非法批次。
+    requireProtocolError(
+        [&] {
+            // 该 Lambda 尝试序列化空批次。
+            logbridge::protocol::serializeLogBatch(emptyBatch);
+        },
+        "empty batch should be rejected");
 }
 
 } // namespace
@@ -190,6 +271,8 @@ int main() {
     try {
         testRoundTrip();
         testHeaderEncoding();
+        testBatchRoundTrip();
+        testAckRoundTrip();
         testInvalidFrames();
         testLengthLimits();
 

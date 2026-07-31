@@ -1,11 +1,10 @@
 #include "TcpClient.h"
 
 #include "Protocol.h"
+#include "SocketIO.h"
 
 #include <cerrno>
-#include <cstddef>
 #include <netdb.h>
-#include <span>
 #include <stdexcept>
 #include <system_error>
 #include <sys/socket.h>
@@ -74,35 +73,6 @@ int connectToServer(const std::string& host, std::uint16_t port) {
     return connectedFd;
 }
 
-// 通过 socketFd 发送 data 中的全部字节，中途被信号打断时继续发送。
-void sendAll(int socketFd, std::span<const std::uint8_t> data) {
-    std::size_t sentBytes = 0; // 记录已经成功交给内核的字节数。
-
-    // send() 可能只发送一部分数据，因此必须循环直到整帧发完。
-    while (sentBytes < data.size()) {
-        // result 是本次 send() 实际发送的字节数，负数表示失败。
-        const ssize_t result = ::send(
-            socketFd,
-            data.data() + sentBytes,
-            data.size() - sentBytes,
-            MSG_NOSIGNAL);
-
-        if (result > 0) {
-            sentBytes += static_cast<std::size_t>(result);
-            continue;
-        }
-
-        if (result < 0 && errno == EINTR) {
-            continue;
-        }
-
-        // error 保存用于构造异常的系统错误码。
-        const int error = result == 0 ? EPIPE : errno;
-        throw std::system_error(
-            error, std::generic_category(), "cannot send log frame");
-    }
-}
-
 } // namespace
 
 // 连接 host:port，并取得该连接的唯一所有权。
@@ -122,7 +92,43 @@ void TcpClient::sendLogMessage(const LogMessage& message) const {
     // frame 保存 message 序列化后可直接发送的完整字节流。
     const protocol::ByteBuffer frame =
         protocol::serializeLogMessage(message);
-    sendAll(socketFd_, frame);
+    net::sendAll(socketFd_, frame);
+}
+
+// 把 messages 编码成一个批次帧，只执行一轮完整发送。
+void TcpClient::sendLogBatch(
+    std::span<const LogMessage> messages) const {
+    const protocol::ByteBuffer frame = // 保存整个批次的协议帧。
+        protocol::serializeLogBatch(messages);
+    net::sendAll(socketFd_, frame);
+}
+
+// 接收并校验一帧 ACK，返回服务端累计确认的最大消息 ID。
+std::uint64_t TcpClient::receiveAck() const {
+    const auto frame = net::receiveFrame(socketFd_); // 服务端返回的完整协议帧。
+    if (!frame) {
+        throw std::runtime_error(
+            "server closed the connection before sending ack");
+    }
+
+    return protocol::deserializeAck(*frame).confirmedId;
+}
+
+// 完成“发送批次—等待确认—核对确认 ID”的完整可靠发送步骤。
+std::uint64_t TcpClient::sendLogBatchAndWaitAck(
+    std::span<const LogMessage> messages) const {
+    sendLogBatch(messages);
+
+    const std::uint64_t expectedId = // 当前批次最后一条消息的 ID。
+        messages.back().id;
+    const std::uint64_t confirmedId = receiveAck(); // 服务端实际确认的 ID。
+    if (confirmedId != expectedId) {
+        throw std::runtime_error(
+            "ack id mismatch: expected " + std::to_string(expectedId) +
+            ", received " + std::to_string(confirmedId));
+    }
+
+    return confirmedId;
 }
 
 } // namespace logbridge

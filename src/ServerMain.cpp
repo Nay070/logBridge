@@ -41,12 +41,21 @@ int main(int argc, char* argv[]) {
             std::cout << "客户端已连接\n";
 
             try {
-                // message 保存本轮从 TCP 连接中解析出的一条日志。
-                while (auto message = server.receiveLogMessage()) {
-                    std::cout << '[' << message->id << "] "
-                              << message->timestampMs << ' '
-                              << message->source << " | "
-                              << message->content << '\n';
+                // messages 保存本轮从单日志帧或批次帧中解析出的日志。
+                while (auto messages = server.receiveLogBatch()) {
+                    // message 表示当前正在处理的一条日志。
+                    for (const LogMessage& message : *messages) {
+                        std::cout << '[' << message.id << "] "
+                                  << message.timestampMs << ' '
+                                  << message.source << " | "
+                                  << message.content << '\n';
+                    }
+
+                    const std::uint64_t confirmedId = // 本批次累计确认到的最大 ID。
+                        messages->back().id;
+                    server.sendAck(confirmedId);
+                    std::cout << "已确认批次：" << messages->size()
+                              << " 条，最大消息 ID=" << confirmedId << '\n';
                 }
                 std::cout << "客户端已断开\n";
             // exception 保存当前客户端发送非法数据或网络失败的原因。

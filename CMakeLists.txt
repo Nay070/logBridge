@@ -12,12 +12,14 @@ find_package(Threads REQUIRED)
 add_executable(logbridge
         src/FileTailReader.cpp
         src/Protocol.cpp
+        src/SocketIO.cpp
         src/TcpClient.cpp
         src/main.cpp
 )
 
 add_executable(logbridge_server
         src/Protocol.cpp
+        src/SocketIO.cpp
         src/TcpServer.cpp
         src/ServerMain.cpp
 )
@@ -74,6 +76,29 @@ if (BUILD_TESTING)
             COMMAND file_tail_reader_tests
     )
 
+    add_executable(blocking_queue_tests
+            tests/BoundedBlockingQueueTest.cpp
+    )
+
+    target_include_directories(blocking_queue_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(blocking_queue_tests PRIVATE
+            Threads::Threads
+    )
+
+    target_compile_options(blocking_queue_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    add_test(
+            NAME blocking_queue
+            COMMAND blocking_queue_tests
+    )
+
     add_executable(protocol_tests
             tests/ProtocolTest.cpp
             src/Protocol.cpp
@@ -97,6 +122,7 @@ if (BUILD_TESTING)
     add_executable(tcp_transport_tests
             tests/TcpTransportTest.cpp
             src/Protocol.cpp
+            src/SocketIO.cpp
             src/TcpClient.cpp
             src/TcpServer.cpp
     )
