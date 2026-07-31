@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <utility>
 
+// 保存日志文件路径，并拒绝空路径。
+// path 是调用者指定的日志文件路径。
 FileTailReader::FileTailReader(std::string path)
     : path_(std::move(path)) {
     if (path_.empty()) {
@@ -12,19 +14,22 @@ FileTailReader::FileTailReader(std::string path)
     }
 }
 
+// 从 offset_ 开始读取新增字节，拆分并返回其中的完整日志行。
 std::vector<std::string> FileTailReader::readNewLines() {
-    std::ifstream file(path_, std::ios::binary); //使用二进制模式可以避免系统自动转换换行符
+    // file 表示本次打开的输入文件流；二进制模式可以避免系统转换换行符。
+    std::ifstream file(path_, std::ios::binary);
     if (!file) {
         throw std::runtime_error("cannot open log file: " + path_);
     }
 
-    // 先取得本次观察到的文件大小。
+    // endPosition 保存本次观察到的文件末尾位置。
     file.seekg(0, std::ios::end);
     const std::streampos endPosition = file.tellg();
     if (endPosition < 0) {
         throw std::runtime_error("cannot determine log file size: " + path_);
     }
 
+    // fileSize 是本次读取开始时日志文件的总字节数。
     const auto fileSize = static_cast<std::uint64_t>(endPosition);
 
     // 文件变小通常表示被截断，第一版从头重新读取。
@@ -38,7 +43,7 @@ std::vector<std::string> FileTailReader::readNewLines() {
         return {};
     }
 
-    // 计算未读数据量。
+    // unreadSize 表示 offset_ 之后还有多少字节没有读取。
     const std::uint64_t unreadSize = fileSize - offset_;
     if (unreadSize >
         static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max())) {
@@ -47,9 +52,11 @@ std::vector<std::string> FileTailReader::readNewLines() {
 
     file.seekg(static_cast<std::streamoff>(offset_), std::ios::beg);
 
+    // chunk 暂存本次从文件中新读取到的原始字节。
     std::string chunk(static_cast<std::size_t>(unreadSize), '\0');
     file.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
 
+    // bytesRead 是 file.read() 实际成功读取的字节数。
     const std::streamsize bytesRead = file.gcount();
     if (file.bad()) {
         throw std::runtime_error("cannot read log file: " + path_);
@@ -59,15 +66,17 @@ std::vector<std::string> FileTailReader::readNewLines() {
     offset_ += static_cast<std::uint64_t>(bytesRead);
     pending_.append(chunk);
 
-    std::vector<std::string> lines;
-    std::size_t lineStart = 0;
+    std::vector<std::string> lines; // 保存本次找到的所有完整日志行。
+    std::size_t lineStart = 0;      // 当前待解析日志行在 pending_ 中的起点。
 
     while (true) {
+        // newline 保存从 lineStart 开始找到的下一个换行符位置。
         const std::size_t newline = pending_.find('\n', lineStart);
         if (newline == std::string::npos) {
             break;
         }
 
+        // line 保存当前换行符之前的一条完整日志。
         std::string line = pending_.substr(lineStart, newline - lineStart);
 
         // 兼容以 CRLF 结尾的日志文件。
@@ -84,10 +93,12 @@ std::vector<std::string> FileTailReader::readNewLines() {
     return lines;
 }
 
+// 返回当前文件读取偏移量，不修改读取器状态。
 std::uint64_t FileTailReader::offset() const noexcept {
     return offset_;
 }
 
+// 返回正在监听的文件路径，不复制字符串。
 const std::string &FileTailReader::path() const noexcept {
     return path_;
 }

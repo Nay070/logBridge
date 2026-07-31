@@ -12,7 +12,14 @@ find_package(Threads REQUIRED)
 add_executable(logbridge
         src/FileTailReader.cpp
         src/Protocol.cpp
+        src/TcpClient.cpp
         src/main.cpp
+)
+
+add_executable(logbridge_server
+        src/Protocol.cpp
+        src/TcpServer.cpp
+        src/ServerMain.cpp
 )
 
 # 添加项目头文件目录。
@@ -20,11 +27,25 @@ target_include_directories(logbridge PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+target_include_directories(logbridge_server PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 target_link_libraries(logbridge PRIVATE
         Threads::Threads
 )
 
+target_link_libraries(logbridge_server PRIVATE
+        Threads::Threads
+)
+
 target_compile_options(logbridge PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+)
+
+target_compile_options(logbridge_server PRIVATE
         -Wall
         -Wextra
         -Wpedantic
@@ -71,5 +92,31 @@ if (BUILD_TESTING)
     add_test(
             NAME protocol
             COMMAND protocol_tests
+    )
+
+    add_executable(tcp_transport_tests
+            tests/TcpTransportTest.cpp
+            src/Protocol.cpp
+            src/TcpClient.cpp
+            src/TcpServer.cpp
+    )
+
+    target_include_directories(tcp_transport_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(tcp_transport_tests PRIVATE
+            Threads::Threads
+    )
+
+    target_compile_options(tcp_transport_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    add_test(
+            NAME tcp_transport
+            COMMAND tcp_transport_tests
     )
 endif ()
