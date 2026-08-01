@@ -2,13 +2,14 @@
 
 #include "LogMessage.h"
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <vector>
 
 namespace logbridge {
 
-// 第一版使用阻塞 Socket，一次处理一个客户端连接。
+// 使用阻塞 Socket，一次处理一个客户端连接，并支持从其他线程停止阻塞操作。
 class TcpServer {
 public:
     // 创建、绑定并监听指定端口；port 为 0 时由操作系统选择空闲端口。
@@ -23,8 +24,11 @@ public:
     // 禁止通过赋值复制 Socket 文件描述符。
     TcpServer& operator=(const TcpServer&) = delete;
 
-    // 阻塞等待一个客户端连接，并保存已连接的 Socket。
-    void acceptClient();
+    // 阻塞等待一个客户端连接；服务器已停止时返回 false。
+    bool acceptClient();
+
+    // 关闭监听和客户端 Socket，使阻塞中的网络操作及时结束。
+    void stop() noexcept;
 
     // 接收并解析一条完整日志；客户端正常断开时返回 nullopt。
     std::optional<LogMessage> receiveLogMessage() const;
@@ -39,8 +43,9 @@ public:
     [[nodiscard]] std::uint16_t port() const noexcept;
 
 private:
-    int listenFd_{-1};       // 负责监听新连接的 Socket 文件描述符。
-    int clientFd_{-1};       // 当前已连接客户端的 Socket 文件描述符。
+    std::atomic<int> listenFd_{-1}; // 负责监听新连接的 Socket 文件描述符。
+    std::atomic<int> clientFd_{-1}; // 当前已连接客户端的 Socket 文件描述符。
+    std::atomic<bool> stopped_{false}; // 标记服务器是否已收到停止请求。
     std::uint16_t port_{};   // bind 成功后实际使用的端口号。
 };
 

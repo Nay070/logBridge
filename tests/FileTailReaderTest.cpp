@@ -35,6 +35,7 @@ int main() {
     // path 是本次测试独占使用的临时日志文件路径。
     const auto path = std::filesystem::temp_directory_path() /
                       ("logbridge-reader-" + std::to_string(uniqueId) + ".log");
+    const auto rotatedPath = path.string() + ".1"; // 轮转后旧文件使用的路径。
 
     try {
         // 创建空日志文件，并从文件开头开始监听。
@@ -77,12 +78,43 @@ int main() {
                     std::vector<std::string>{"after truncate"},
                 "truncated file should be read from the beginning");
 
+        const std::uint64_t oldDeviceId = reader.deviceId(); // 轮转前文件所在设备编号。
+        const std::uint64_t oldInode = reader.inode(); // 轮转前文件的 inode。
+        const std::uint64_t oldOffset = reader.committedOffset(); // 轮转前检查点。
+
+        std::filesystem::rename(path, rotatedPath);
+        append(rotatedPath, "old file tail\n");
+        {
+            std::ofstream newFile(path, std::ios::binary | std::ios::trunc);
+            newFile << "new file line\n";
+        }
+
+        const std::vector<std::string> oldTail = reader.readNewLines();
+        require(oldTail == std::vector<std::string>{"old file tail"},
+                "rotation must drain the old file before switching");
+        require(reader.inode() == oldInode,
+                "reader must keep the old identity while returning its tail");
+
+        const std::vector<std::string> newFileLines = reader.readNewLines();
+        require(newFileLines == std::vector<std::string>{"new file line"},
+                "rotation must continue from the new file beginning");
+        require(reader.inode() != oldInode || reader.deviceId() != oldDeviceId,
+                "rotated file must have a different identity");
+
+        FileTailReader restarted(
+            path.string(), oldOffset, oldDeviceId, oldInode);
+        require(restarted.readNewLines() ==
+                    std::vector<std::string>{"new file line"},
+                "stale checkpoint identity must not skip the replacement file");
+
         std::filesystem::remove(path);
+        std::filesystem::remove(rotatedPath);
         std::cout << "FileTailReader tests passed\n";
         return 0;
     // exception 保存任意断言或文件操作失败的原因。
     } catch (const std::exception& exception) {
         std::filesystem::remove(path);
+        std::filesystem::remove(rotatedPath);
         std::cerr << "FileTailReader test failed: "
                   << exception.what() << '\n';
         return 1;

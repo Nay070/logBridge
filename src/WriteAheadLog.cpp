@@ -56,6 +56,11 @@ std::uint64_t WriteAheadLog::maxMessageId() const {
     return maximum;
 }
 
+std::size_t WriteAheadLog::pendingCount() const {
+    std::lock_guard lock(mutex_);
+    return pending_.size();
+}
+
 void WriteAheadLog::load() {
     const storage::Bytes data = storage::readFile(path_); // WAL 的全部原始字节。
     std::size_t offset = 0; // 下一条记录在 data 中的起点。

@@ -2,6 +2,7 @@
 
 #include "LogMessage.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
@@ -26,6 +27,9 @@ public:
 
     // 返回 WAL 中最大的消息 ID；没有记录时返回 0。
     [[nodiscard]] std::uint64_t maxMessageId() const;
+
+    // 返回当前尚未收到 ACK 的消息数量。
+    [[nodiscard]] std::size_t pendingCount() const;
 
 private:
     // 从磁盘加载完整记录，并清理崩溃留下的不完整尾部。

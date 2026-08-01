@@ -10,10 +10,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
 
 add_executable(logbridge
+        include/BoundedBlockingQueue.h
+        include/ClientState.h
+        include/FileTailReader.h
+        include/LogMessage.h
+        include/Persistence.h
+        include/Protocol.h
+        include/ShutdownSignal.h
+        include/SocketIO.h
+        include/TcpClient.h
+        include/WriteAheadLog.h
         src/ClientState.cpp
         src/FileTailReader.cpp
         src/Persistence.cpp
         src/Protocol.cpp
+        src/ShutdownSignal.cpp
         src/SocketIO.cpp
         src/TcpClient.cpp
         src/WriteAheadLog.cpp
@@ -21,9 +32,17 @@ add_executable(logbridge
 )
 
 add_executable(logbridge_server
+        include/DedupStore.h
+        include/LogMessage.h
+        include/Persistence.h
+        include/Protocol.h
+        include/ShutdownSignal.h
+        include/SocketIO.h
+        include/TcpServer.h
         src/DedupStore.cpp
         src/Persistence.cpp
         src/Protocol.cpp
+        src/ShutdownSignal.cpp
         src/SocketIO.cpp
         src/TcpServer.cpp
         src/ServerMain.cpp
@@ -53,6 +72,24 @@ target_compile_options(logbridge PRIVATE
 )
 
 target_compile_options(logbridge_server PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+)
+
+add_executable(logbridge_benchmark
+        benchmarks/ProtocolBenchmark.cpp
+        include/LogMessage.h
+        include/Protocol.h
+        src/Protocol.cpp
+)
+
+target_include_directories(logbridge_benchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(logbridge_benchmark PRIVATE
+        -O2
         -Wall
         -Wextra
         -Wpedantic
@@ -177,5 +214,18 @@ if (BUILD_TESTING)
     add_test(
             NAME reliability
             COMMAND reliability_tests
+    )
+
+    add_test(
+            NAME end_to_end
+            COMMAND bash
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/EndToEndTest.sh
+                    $<TARGET_FILE:logbridge>
+                    $<TARGET_FILE:logbridge_server>
+    )
+
+    set_tests_properties(end_to_end PROPERTIES
+            RUN_SERIAL TRUE
+            TIMEOUT 20
     )
 endif ()

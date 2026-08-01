@@ -11,7 +11,8 @@
 namespace logbridge {
 namespace {
 
-constexpr const char* StateMagic = "LGBSTATE1"; // 客户端状态文件格式标识。
+constexpr const char* StateMagic = "LGBSTATE2"; // 当前客户端状态文件格式标识。
+constexpr const char* LegacyStateMagic = "LGBSTATE1"; // 不含文件身份的旧格式标识。
 
 // 生成 128 位随机客户端 ID，并编码为 32 个十六进制字符。
 std::string generateClientId() {
@@ -71,6 +72,8 @@ ClientState::ClientState(
     if (sourcePath_ != requestedSource) {
         sourcePath_ = requestedSource;
         fileOffset_ = 0;
+        fileDeviceId_ = 0;
+        fileInode_ = 0;
         changed = true;
     }
 
@@ -118,16 +121,39 @@ std::uint64_t ClientState::fileOffset() const noexcept {
     return fileOffset_;
 }
 
+std::uint64_t ClientState::fileDeviceId() const noexcept {
+    return fileDeviceId_;
+}
+
+std::uint64_t ClientState::fileInode() const noexcept {
+    return fileInode_;
+}
+
 void ClientState::updateFileOffset(std::uint64_t offset) {
-    if (offset == fileOffset_) {
+    updateFileCheckpoint(offset, fileDeviceId_, fileInode_);
+}
+
+void ClientState::updateFileCheckpoint(std::uint64_t offset,
+                                       std::uint64_t deviceId,
+                                       std::uint64_t inode) {
+    if (offset == fileOffset_ &&
+        deviceId == fileDeviceId_ &&
+        inode == fileInode_) {
         return;
     }
-    const std::uint64_t previous = fileOffset_; // 更新失败时需要恢复的旧偏移量。
+
+    const std::uint64_t previousOffset = fileOffset_; // 更新失败时恢复的旧偏移量。
+    const std::uint64_t previousDeviceId = fileDeviceId_; // 更新失败时恢复的旧设备编号。
+    const std::uint64_t previousInode = fileInode_; // 更新失败时恢复的旧 inode。
     fileOffset_ = offset;
+    fileDeviceId_ = deviceId;
+    fileInode_ = inode;
     try {
         persist();
     } catch (...) {
-        fileOffset_ = previous;
+        fileOffset_ = previousOffset;
+        fileDeviceId_ = previousDeviceId;
+        fileInode_ = previousInode;
         throw;
     }
 }
@@ -140,13 +166,31 @@ void ClientState::load() {
     std::string magic; // 文件格式标识。
     std::string nextIdText; // 下一个消息 ID 文本。
     std::string fileOffsetText; // 文件偏移量文本。
+    std::string fileDeviceIdText; // 文件设备编号文本。
+    std::string fileInodeText; // 文件 inode 文本。
     std::string storedSource; // 状态文件中记录的日志路径。
     if (!std::getline(input, magic) ||
         !std::getline(input, clientId_) ||
         !std::getline(input, nextIdText) ||
-        !std::getline(input, fileOffsetText) ||
-        !std::getline(input, storedSource) ||
-        magic != StateMagic || clientId_.empty()) {
+        !std::getline(input, fileOffsetText) || clientId_.empty()) {
+        throw std::runtime_error("invalid client state file");
+    }
+
+    if (magic == StateMagic) {
+        if (!std::getline(input, fileDeviceIdText) ||
+            !std::getline(input, fileInodeText) ||
+            !std::getline(input, storedSource)) {
+            throw std::runtime_error("invalid client state file");
+        }
+        fileDeviceId_ = parseUint64(fileDeviceIdText, "fileDeviceId");
+        fileInode_ = parseUint64(fileInodeText, "fileInode");
+    } else if (magic == LegacyStateMagic) {
+        if (!std::getline(input, storedSource)) {
+            throw std::runtime_error("invalid client state file");
+        }
+        fileDeviceId_ = 0;
+        fileInode_ = 0;
+    } else {
         throw std::runtime_error("invalid client state file");
     }
 
@@ -164,6 +208,8 @@ void ClientState::persist() const {
            << clientId_ << '\n'
            << nextId_ << '\n'
            << fileOffset_ << '\n'
+           << fileDeviceId_ << '\n'
+           << fileInode_ << '\n'
            << sourcePath_ << '\n';
     const std::string text = output.str(); // 完整状态文件内容。
     storage::writeAtomically(path_, asBytes(text));

@@ -64,7 +64,7 @@ void testClientStateRecovery() {
         logbridge::ClientState state(statePath, "app.log", {});
         clientId = state.clientId();
         require(state.nextMessageId() == 1, "first message ID must be one");
-        state.updateFileOffset(42);
+        state.updateFileCheckpoint(42, 7, 99);
     }
 
     {
@@ -72,6 +72,10 @@ void testClientStateRecovery() {
         require(state.clientId() == clientId, "client ID must survive restart");
         require(state.nextMessageId() == 2, "message ID must continue after restart");
         require(state.fileOffset() == 42, "file offset must survive restart");
+        require(state.fileDeviceId() == 7,
+                "file device ID must survive restart");
+        require(state.fileInode() == 99,
+                "file inode must survive restart");
     }
 
     const std::vector<LogMessage> recovered{makeMessage(clientId, 50)};

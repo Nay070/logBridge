@@ -15,18 +15,19 @@ namespace logbridge {
 namespace {
 
 // 关闭 socketFd 并将它重置为 -1；无效描述符会被直接忽略。
-void closeSocket(int& socketFd) noexcept {
-    if (socketFd >= 0) {
-        ::close(socketFd);
-        socketFd = -1;
+void closeSocket(std::atomic<int>& socketFd) noexcept {
+    const int descriptor = socketFd.exchange(-1); // 当前线程取得并负责关闭的描述符。
+    if (descriptor >= 0) {
+        ::shutdown(descriptor, SHUT_RDWR);
+        ::close(descriptor);
     }
 }
 
 } // 匿名命名空间
 
 TcpServer::TcpServer(std::uint16_t port) {
-    listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (listenFd_ < 0) {
+    listenFd_.store(::socket(AF_INET, SOCK_STREAM, 0));
+    if (listenFd_.load() < 0) {
         throw std::system_error(
             errno, std::generic_category(), "cannot create server socket");
     }
@@ -35,7 +36,7 @@ TcpServer::TcpServer(std::uint16_t port) {
         // reuseAddress 用来开启 SO_REUSEADDR，方便程序重启后立即复用端口。
         const int reuseAddress = 1;
         if (::setsockopt(
-                listenFd_,
+                listenFd_.load(),
                 SOL_SOCKET,
                 SO_REUSEADDR,
                 &reuseAddress,
@@ -52,14 +53,14 @@ TcpServer::TcpServer(std::uint16_t port) {
         address.sin_port = htons(port);
 
         if (::bind(
-                listenFd_,
+                listenFd_.load(),
                 reinterpret_cast<const sockaddr*>(&address),
                 sizeof(address)) < 0) {
             throw std::system_error(
                 errno, std::generic_category(), "cannot bind server socket");
         }
 
-        if (::listen(listenFd_, 16) < 0) {
+        if (::listen(listenFd_.load(), 16) < 0) {
             throw std::system_error(
                 errno, std::generic_category(), "cannot listen on socket");
         }
@@ -68,7 +69,7 @@ TcpServer::TcpServer(std::uint16_t port) {
         // addressLength 告诉 getsockname() address 缓冲区的大小。
         socklen_t addressLength = sizeof(address);
         if (::getsockname(
-                listenFd_,
+                listenFd_.load(),
                 reinterpret_cast<sockaddr*>(&address),
                 &addressLength) < 0) {
             throw std::system_error(
@@ -82,29 +83,50 @@ TcpServer::TcpServer(std::uint16_t port) {
 }
 
 TcpServer::~TcpServer() {
+    stop();
+}
+
+bool TcpServer::acceptClient() {
+    closeSocket(clientFd_);
+    if (stopped_.load()) {
+        return false;
+    }
+
+    const int listenFd = listenFd_.load(); // 本次 accept 使用的监听描述符。
+    int acceptedFd = -1; // 本次接收到的客户端描述符。
+    do {
+        acceptedFd = ::accept(listenFd, nullptr, nullptr);
+    } while (acceptedFd < 0 && errno == EINTR && !stopped_.load());
+
+    if (acceptedFd < 0) {
+        if (stopped_.load()) {
+            return false;
+        }
+        throw std::system_error(
+            errno, std::generic_category(), "cannot accept client");
+    }
+
+    clientFd_.store(acceptedFd);
+    if (stopped_.load()) {
+        closeSocket(clientFd_);
+        return false;
+    }
+    return true;
+}
+
+void TcpServer::stop() noexcept {
+    stopped_.store(true);
     closeSocket(clientFd_);
     closeSocket(listenFd_);
 }
 
-void TcpServer::acceptClient() {
-    closeSocket(clientFd_);
-
-    do {
-        clientFd_ = ::accept(listenFd_, nullptr, nullptr);
-    } while (clientFd_ < 0 && errno == EINTR);
-
-    if (clientFd_ < 0) {
-        throw std::system_error(
-            errno, std::generic_category(), "cannot accept client");
-    }
-}
-
 std::optional<LogMessage> TcpServer::receiveLogMessage() const {
-    if (clientFd_ < 0) {
+    const int clientFd = clientFd_.load(); // 当前接收操作使用的客户端描述符。
+    if (clientFd < 0) {
         throw std::logic_error("no client has been accepted");
     }
 
-    const auto frame = net::receiveFrame(clientFd_); // 客户端发送的完整协议帧。
+    const auto frame = net::receiveFrame(clientFd); // 客户端发送的完整协议帧。
     if (!frame) {
         return std::nullopt;
     }
@@ -113,11 +135,12 @@ std::optional<LogMessage> TcpServer::receiveLogMessage() const {
 
 std::optional<std::vector<LogMessage>>
 TcpServer::receiveLogBatch() const {
-    if (clientFd_ < 0) {
+    const int clientFd = clientFd_.load(); // 当前接收操作使用的客户端描述符。
+    if (clientFd < 0) {
         throw std::logic_error("no client has been accepted");
     }
 
-    const auto frame = net::receiveFrame(clientFd_); // 客户端发送的完整协议帧。
+    const auto frame = net::receiveFrame(clientFd); // 客户端发送的完整协议帧。
     if (!frame) {
         return std::nullopt;
     }
@@ -137,13 +160,14 @@ TcpServer::receiveLogBatch() const {
 }
 
 void TcpServer::sendAck(std::uint64_t confirmedId) const {
-    if (clientFd_ < 0) {
+    const int clientFd = clientFd_.load(); // 当前发送 ACK 使用的客户端描述符。
+    if (clientFd < 0) {
         throw std::logic_error("no client has been accepted");
     }
 
     const protocol::ByteBuffer frame = // confirmedId 对应的完整 ACK 帧。
         protocol::serializeAck(confirmedId);
-    net::sendAll(clientFd_, frame);
+    net::sendAll(clientFd, frame);
 }
 
 std::uint16_t TcpServer::port() const noexcept {
