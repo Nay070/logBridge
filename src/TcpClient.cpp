@@ -8,10 +8,36 @@
 #include <stdexcept>
 #include <system_error>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 namespace logbridge {
 namespace {
+
+// 为 Socket 设置发送和接收超时。
+void configureTimeout(int socketFd,
+                      std::chrono::milliseconds timeout) {
+    if (timeout.count() <= 0) {
+        throw std::invalid_argument("socket timeout must be positive");
+    }
+
+    const auto seconds = // 超时中的完整秒数。
+        std::chrono::duration_cast<std::chrono::seconds>(timeout);
+    const auto microseconds = // 去掉完整秒数后剩余的微秒数。
+        std::chrono::duration_cast<std::chrono::microseconds>(timeout - seconds);
+    const timeval value{
+        .tv_sec = static_cast<time_t>(seconds.count()),
+        .tv_usec = static_cast<suseconds_t>(microseconds.count()),
+    };
+
+    if (::setsockopt(
+            socketFd, SOL_SOCKET, SO_RCVTIMEO, &value, sizeof(value)) < 0 ||
+        ::setsockopt(
+            socketFd, SOL_SOCKET, SO_SNDTIMEO, &value, sizeof(value)) < 0) {
+        throw std::system_error(
+            errno, std::generic_category(), "cannot configure socket timeout");
+    }
+}
 
 // 解析 host 和 port，依次尝试候选地址并返回已连接的 Socket 描述符。
 int connectToServer(const std::string& host, std::uint16_t port) {
@@ -73,21 +99,27 @@ int connectToServer(const std::string& host, std::uint16_t port) {
     return connectedFd;
 }
 
-} // namespace
+} // 匿名命名空间
 
-// 连接 host:port，并取得该连接的唯一所有权。
-TcpClient::TcpClient(const std::string& host, std::uint16_t port)
+TcpClient::TcpClient(const std::string& host,
+                     std::uint16_t port,
+                     std::chrono::milliseconds ioTimeout)
     : socketFd_(connectToServer(host, port)) {
+    try {
+        configureTimeout(socketFd_, ioTimeout);
+    } catch (...) {
+        ::close(socketFd_);
+        socketFd_ = -1;
+        throw;
+    }
 }
 
-// 对象销毁时关闭 Socket，避免文件描述符泄漏。
 TcpClient::~TcpClient() {
     if (socketFd_ >= 0) {
         ::close(socketFd_);
     }
 }
 
-// 将 message 序列化成协议帧，再确保所有字节都发送完成。
 void TcpClient::sendLogMessage(const LogMessage& message) const {
     // frame 保存 message 序列化后可直接发送的完整字节流。
     const protocol::ByteBuffer frame =
@@ -95,7 +127,6 @@ void TcpClient::sendLogMessage(const LogMessage& message) const {
     net::sendAll(socketFd_, frame);
 }
 
-// 把 messages 编码成一个批次帧，只执行一轮完整发送。
 void TcpClient::sendLogBatch(
     std::span<const LogMessage> messages) const {
     const protocol::ByteBuffer frame = // 保存整个批次的协议帧。
@@ -103,7 +134,6 @@ void TcpClient::sendLogBatch(
     net::sendAll(socketFd_, frame);
 }
 
-// 接收并校验一帧 ACK，返回服务端累计确认的最大消息 ID。
 std::uint64_t TcpClient::receiveAck() const {
     const auto frame = net::receiveFrame(socketFd_); // 服务端返回的完整协议帧。
     if (!frame) {
@@ -114,7 +144,6 @@ std::uint64_t TcpClient::receiveAck() const {
     return protocol::deserializeAck(*frame).confirmedId;
 }
 
-// 完成“发送批次—等待确认—核对确认 ID”的完整可靠发送步骤。
 std::uint64_t TcpClient::sendLogBatchAndWaitAck(
     std::span<const LogMessage> messages) const {
     sendLogBatch(messages);
@@ -131,4 +160,4 @@ std::uint64_t TcpClient::sendLogBatchAndWaitAck(
     return confirmedId;
 }
 
-} // namespace logbridge
+} // logbridge 命名空间

@@ -10,14 +10,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
 
 add_executable(logbridge
+        src/ClientState.cpp
         src/FileTailReader.cpp
+        src/Persistence.cpp
         src/Protocol.cpp
         src/SocketIO.cpp
         src/TcpClient.cpp
+        src/WriteAheadLog.cpp
         src/main.cpp
 )
 
 add_executable(logbridge_server
+        src/DedupStore.cpp
+        src/Persistence.cpp
         src/Protocol.cpp
         src/SocketIO.cpp
         src/TcpServer.cpp
@@ -144,5 +149,33 @@ if (BUILD_TESTING)
     add_test(
             NAME tcp_transport
             COMMAND tcp_transport_tests
+    )
+
+    add_executable(reliability_tests
+            tests/ReliabilityTest.cpp
+            src/ClientState.cpp
+            src/DedupStore.cpp
+            src/Persistence.cpp
+            src/Protocol.cpp
+            src/WriteAheadLog.cpp
+    )
+
+    target_include_directories(reliability_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(reliability_tests PRIVATE
+            Threads::Threads
+    )
+
+    target_compile_options(reliability_tests PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    add_test(
+            NAME reliability
+            COMMAND reliability_tests
     )
 endif ()

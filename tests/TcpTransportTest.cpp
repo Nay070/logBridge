@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -11,6 +12,8 @@
 #include <vector>
 
 namespace {
+
+using namespace std::chrono_literals;
 
 // 检查 condition；失败时使用 message 抛出异常终止当前测试。
 void require(bool condition, const std::string& message) {
@@ -23,6 +26,7 @@ void require(bool condition, const std::string& message) {
 void requireSameMessage(const LogMessage& actual,
                         const LogMessage& expected) {
     require(actual.id == expected.id, "message id mismatch");
+    require(actual.clientId == expected.clientId, "client id mismatch");
     require(actual.timestampMs == expected.timestampMs,
             "timestamp mismatch");
     require(actual.source == expected.source, "source mismatch");
@@ -56,12 +60,14 @@ void testClientServerRoundTrip() {
     const std::vector<LogMessage> sent{
         LogMessage{
             .id = 1,
+            .clientId = "tcp-test-client",
             .timestampMs = 1000,
             .source = "/var/log/app.log",
             .content = "第一条日志",
         },
         LogMessage{
             .id = 2,
+            .clientId = "tcp-test-client",
             .timestampMs = 2000,
             .source = "/var/log/app.log",
             // 较大的消息可验证 recv() 循环读取不完整数据。
@@ -69,6 +75,7 @@ void testClientServerRoundTrip() {
         },
         LogMessage{
             .id = 3,
+            .clientId = "tcp-test-client",
             .timestampMs = 3000,
             .source = "worker.log",
             .content = "third message",
@@ -118,6 +125,7 @@ void testMismatchedAckRejected() {
     const std::vector<LogMessage> sent{ // 用于错误 ACK 测试的单条消息批次。
         LogMessage{
             .id = 20,
+            .clientId = "tcp-test-client",
             .timestampMs = 4000,
             .source = "app.log",
             .content = "ack mismatch",
@@ -141,13 +149,59 @@ void testMismatchedAckRejected() {
     require(rejected, "client must reject mismatched ack id");
 }
 
-} // namespace
+// 验证服务端不返回 ACK 时，客户端会在超时后退出等待。
+void testAckTimeout() {
+    logbridge::TcpServer server(0); // 使用系统分配的独立测试端口。
+    std::exception_ptr serverError; // 保存服务端线程中的异常。
+
+    std::thread serverThread([&] {
+        try {
+            server.acceptClient();
+            const auto batch = server.receiveLogBatch(); // 接收后故意不发送 ACK。
+            if (!batch || batch->empty()) {
+                throw std::runtime_error("server did not receive timeout batch");
+            }
+            std::this_thread::sleep_for(150ms);
+        } catch (...) {
+            serverError = std::current_exception();
+        }
+    });
+
+    const std::vector<LogMessage> sent{
+        LogMessage{
+            .id = 30,
+            .clientId = "tcp-timeout-client",
+            .timestampMs = 5000,
+            .source = "app.log",
+            .content = "ack timeout",
+        },
+    };
+
+    bool timedOut = false; // 客户端是否检测到 ACK 超时。
+    {
+        logbridge::TcpClient client("127.0.0.1", server.port(), 50ms);
+        try {
+            client.sendLogBatchAndWaitAck(sent);
+        } catch (const std::exception&) {
+            timedOut = true;
+        }
+    }
+
+    serverThread.join();
+    if (serverError) {
+        std::rethrow_exception(serverError);
+    }
+    require(timedOut, "client must stop waiting after ACK timeout");
+}
+
+} // 匿名命名空间
 
 // 运行 TCP 端到端测试，并用退出码向 CTest 报告结果。
 int main() {
     try {
         testClientServerRoundTrip();
         testMismatchedAckRejected();
+        testAckTimeout();
         std::cout << "TCP transport tests passed\n";
         return 0;
     // exception 保存网络、协议或断言失败的具体原因。

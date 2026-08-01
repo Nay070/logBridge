@@ -2,6 +2,7 @@
 
 #include "LogMessage.h"
 
+#include <chrono>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -11,8 +12,11 @@ namespace logbridge {
 // 阻塞式 TCP 客户端，负责连接服务端并发送完整日志帧。
 class TcpClient {
 public:
-    // 连接指定服务端；host 是主机名或 IP，port 是服务端端口。
-    TcpClient(const std::string& host, std::uint16_t port);
+    // 连接服务端，并为发送和 ACK 接收设置超时。
+    TcpClient(
+        const std::string& host,
+        std::uint16_t port,
+        std::chrono::milliseconds ioTimeout = std::chrono::seconds(3));
 
     // 关闭当前客户端持有的 Socket 文件描述符。
     ~TcpClient();
@@ -40,4 +44,4 @@ private:
     int socketFd_{-1}; // 与服务端通信的 Socket 文件描述符，-1 表示无效。
 };
 
-} // namespace logbridge
+} // logbridge 命名空间

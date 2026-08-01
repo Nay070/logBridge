@@ -37,6 +37,7 @@ void testRoundTrip() {
     // original 是序列化前的原始日志，包含中文以验证 UTF-8 数据。
     const LogMessage original{
         .id = 1001,
+        .clientId = "client-a",
         .timestampMs = 1'785'331'995'346,
         .source = "/var/log/app.log",
         .content = "用户登录成功",
@@ -50,6 +51,7 @@ void testRoundTrip() {
         logbridge::protocol::deserializeLogMessage(frame);
 
     require(restored.id == original.id, "message id mismatch");
+    require(restored.clientId == original.clientId, "client id mismatch");
     require(restored.timestampMs == original.timestampMs,
             "timestamp mismatch");
     require(restored.source == original.source, "source mismatch");
@@ -61,6 +63,7 @@ void testHeaderEncoding() {
     // message 使用空字符串，使 Payload 只保留 24 字节固定字段。
     const LogMessage message{
         .id = 1,
+        .clientId = "client-a",
         .timestampMs = 2,
         .source = "",
         .content = "",
@@ -71,7 +74,7 @@ void testHeaderEncoding() {
         logbridge::protocol::serializeLogMessage(message);
 
     require(frame.size() ==
-                logbridge::protocol::FrameHeaderSize + 24,
+                logbridge::protocol::FrameHeaderSize + 28 + 8,
             "unexpected empty-message frame size");
     require(frame[0] == 0x4C && frame[1] == 0x47 &&
                 frame[2] == 0x42 && frame[3] == 0x31,
@@ -84,7 +87,7 @@ void testHeaderEncoding() {
 
     // header 保存通过公开接口解析出的固定帧头字段。
     const auto header = logbridge::protocol::parseFrameHeader(frame);
-    require(header.payloadLength == 24,
+    require(header.payloadLength == 36,
             "payload length mismatch");
 }
 
@@ -93,18 +96,21 @@ void testBatchRoundTrip() {
     const std::vector<LogMessage> original{ // 准备放入同一批次的三条日志。
         LogMessage{
             .id = 10,
+            .clientId = "client-a",
             .timestampMs = 100,
             .source = "app.log",
             .content = "第一条",
         },
         LogMessage{
             .id = 11,
+            .clientId = "client-a",
             .timestampMs = 101,
             .source = "app.log",
             .content = "second",
         },
         LogMessage{
             .id = 12,
+            .clientId = "client-a",
             .timestampMs = 102,
             .source = "worker.log",
             .content = "third",
@@ -125,6 +131,8 @@ void testBatchRoundTrip() {
     for (std::size_t index = 0; index < original.size(); ++index) {
         require(restored[index].id == original[index].id,
                 "batch message id mismatch");
+        require(restored[index].clientId == original[index].clientId,
+                "batch client id mismatch");
         require(restored[index].timestampMs == original[index].timestampMs,
                 "batch timestamp mismatch");
         require(restored[index].source == original[index].source,
@@ -157,6 +165,7 @@ void testInvalidFrames() {
     // message 是生成后续各种异常测试帧的基础日志。
     const LogMessage message{
         .id = 7,
+        .clientId = "client-a",
         .timestampMs = -10,
         .source = "app.log",
         .content = "hello",
@@ -217,6 +226,7 @@ void testLengthLimits() {
     // oversizedSource 的来源字段比协议上限多一个字节。
     LogMessage oversizedSource{
         .id = 1,
+        .clientId = "client-a",
         .timestampMs = 1,
         .source =
             std::string(logbridge::protocol::MaxSourceLength + 1, 's'),
@@ -233,6 +243,7 @@ void testLengthLimits() {
     // oversizedContent 的正文比协议上限多一个字节。
     LogMessage oversizedContent{
         .id = 1,
+        .clientId = "client-a",
         .timestampMs = 1,
         .source = "app.log",
         .content =
@@ -264,7 +275,7 @@ void testLengthLimits() {
         "empty batch should be rejected");
 }
 
-} // namespace
+} // 匿名命名空间
 
 // 按顺序运行所有协议测试，任一异常都会令测试程序失败。
 int main() {

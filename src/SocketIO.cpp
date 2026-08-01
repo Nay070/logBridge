@@ -45,9 +45,8 @@ bool receiveExact(int socketFd, std::span<std::uint8_t> output) {
     return true;
 }
 
-} // namespace
+} // 匿名命名空间
 
-// 处理短写、信号中断和对端断开，确保整个 data 被发送。
 void sendAll(int socketFd, std::span<const std::uint8_t> data) {
     std::size_t sentBytes = 0; // 已经成功交给内核的字节数。
 
@@ -73,7 +72,6 @@ void sendAll(int socketFd, std::span<const std::uint8_t> data) {
     }
 }
 
-// 先读取固定帧头，再根据 payloadLength 读取剩余数据。
 std::optional<protocol::ByteBuffer> receiveFrame(int socketFd) {
     // headerBytes 保存从 TCP 流中读取的固定帧头。
     std::array<std::uint8_t, protocol::FrameHeaderSize> headerBytes{};
@@ -98,4 +96,4 @@ std::optional<protocol::ByteBuffer> receiveFrame(int socketFd) {
     return frame;
 }
 
-} // namespace logbridge::net
+} // logbridge::net 命名空间

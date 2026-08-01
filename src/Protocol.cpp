@@ -7,7 +7,7 @@
 namespace logbridge::protocol {
 namespace {
 
-constexpr std::uint32_t LogRecordFixedSize = 8 + 8 + 4 + 4; // 每条日志固定字段的字节数。
+constexpr std::uint32_t LogRecordFixedSize = 8 + 8 + 4 + 4 + 4; // 每条日志固定字段的字节数。
 constexpr std::uint32_t AckPayloadSize = 8;                  // ACK 中确认 ID 的字节数。
 constexpr std::uint32_t BatchPrefixSize = 4;                 // 批次中消息数量字段的字节数。
 
@@ -133,6 +133,13 @@ MessageType parseMessageType(std::uint8_t rawType) {
 
 // 校验日志字符串长度，并返回这条日志编码后的记录大小。
 std::size_t logRecordSize(const LogMessage& message) {
+    if (message.id == 0) {
+        throw ProtocolError("message id cannot be zero");
+    }
+    if (message.clientId.empty() ||
+        message.clientId.size() > MaxClientIdLength) {
+        throw ProtocolError("invalid client id length");
+    }
     if (message.source.size() > MaxSourceLength) {
         throw ProtocolError("log source is too long");
     }
@@ -140,12 +147,14 @@ std::size_t logRecordSize(const LogMessage& message) {
         throw ProtocolError("log content is too long");
     }
 
-    return LogRecordFixedSize + message.source.size() +
+    return LogRecordFixedSize + message.clientId.size() + message.source.size() +
            message.content.size();
 }
 
 // 将一条日志的字段追加到 output，不包含协议帧头。
 void appendLogRecord(ByteBuffer& output, const LogMessage& message) {
+    const auto clientIdLength = // 客户端 ID 的 UTF-8 字节数。
+        static_cast<std::uint32_t>(message.clientId.size());
     const auto sourceLength = // 日志来源字符串的 UTF-8 字节数。
         static_cast<std::uint32_t>(message.source.size());
     const auto contentLength = // 日志正文字符串的 UTF-8 字节数。
@@ -155,8 +164,11 @@ void appendLogRecord(ByteBuffer& output, const LogMessage& message) {
     appendUint64(
         output,
         std::bit_cast<std::uint64_t>(message.timestampMs));
+    appendUint32(output, clientIdLength);
     appendUint32(output, sourceLength);
     appendUint32(output, contentLength);
+    output.insert(
+        output.end(), message.clientId.begin(), message.clientId.end());
     output.insert(
         output.end(), message.source.begin(), message.source.end());
     output.insert(
@@ -169,11 +181,19 @@ LogMessage readLogRecord(std::span<const std::uint8_t> input,
     const std::uint64_t id = readUint64(input, offset); // 恢复出的消息编号。
     const std::int64_t timestampMs = // 恢复出的毫秒级时间戳。
         std::bit_cast<std::int64_t>(readUint64(input, offset));
+    const std::uint32_t clientIdLength = // 客户端 ID 的字节数。
+        readUint32(input, offset);
     const std::uint32_t sourceLength = // 来源字符串的字节数。
         readUint32(input, offset);
     const std::uint32_t contentLength = // 正文字符串的字节数。
         readUint32(input, offset);
 
+    if (id == 0) {
+        throw ProtocolError("message id cannot be zero");
+    }
+    if (clientIdLength == 0 || clientIdLength > MaxClientIdLength) {
+        throw ProtocolError("invalid client id length");
+    }
     if (sourceLength > MaxSourceLength) {
         throw ProtocolError("log source is too long");
     }
@@ -183,6 +203,7 @@ LogMessage readLogRecord(std::span<const std::uint8_t> input,
 
     return LogMessage{
         .id = id,
+        .clientId = readString(input, offset, clientIdLength),
         .timestampMs = timestampMs,
         .source = readString(input, offset, sourceLength),
         .content = readString(input, offset, contentLength),
@@ -199,9 +220,8 @@ void requireFrameSize(std::span<const std::uint8_t> frame,
     }
 }
 
-} // namespace
+} // 匿名命名空间
 
-// 校验并解析固定 12 字节帧头。
 FrameHeader parseFrameHeader(std::span<const std::uint8_t> header) {
     requireBytes(header, 0, FrameHeaderSize);
 
@@ -233,7 +253,6 @@ FrameHeader parseFrameHeader(std::span<const std::uint8_t> header) {
     };
 }
 
-// 把单条 LogMessage 编码成“固定帧头 + 日志记录”。
 ByteBuffer serializeLogMessage(const LogMessage& message) {
     const std::size_t payloadSize = logRecordSize(message); // 日志记录总字节数。
     const auto payloadLength = static_cast<std::uint32_t>(payloadSize);
@@ -245,7 +264,6 @@ ByteBuffer serializeLogMessage(const LogMessage& message) {
     return output;
 }
 
-// 校验单日志帧，并恢复其中的 LogMessage。
 LogMessage deserializeLogMessage(
     std::span<const std::uint8_t> frame) {
     const FrameHeader header = parseFrameHeader(frame); // 解析出的帧头。
@@ -262,7 +280,6 @@ LogMessage deserializeLogMessage(
     return message;
 }
 
-// 将多条日志编码进一个具有明确边界的批次帧。
 ByteBuffer serializeLogBatch(std::span<const LogMessage> messages) {
     if (messages.empty()) {
         throw ProtocolError("log batch cannot be empty");
@@ -271,8 +288,17 @@ ByteBuffer serializeLogBatch(std::span<const LogMessage> messages) {
         throw ProtocolError("too many messages in log batch");
     }
 
+    const std::string& clientId = messages.front().clientId; // 当前批次所属客户端。
+    std::uint64_t previousId = 0; // 用于检查批次内 ID 是否严格递增。
     std::size_t payloadSize = BatchPrefixSize; // 数量字段和所有日志记录的总大小。
     for (const LogMessage& message : messages) {
+        if (message.clientId != clientId) {
+            throw ProtocolError("log batch contains multiple client ids");
+        }
+        if (message.id <= previousId) {
+            throw ProtocolError("log batch ids must be strictly increasing");
+        }
+        previousId = message.id;
         const std::size_t recordSize = logRecordSize(message); // 当前日志记录大小。
         if (recordSize > MaxFramePayloadLength - payloadSize) {
             throw ProtocolError("log batch payload is too large");
@@ -291,7 +317,6 @@ ByteBuffer serializeLogBatch(std::span<const LogMessage> messages) {
     return output;
 }
 
-// 校验批次帧，并按原顺序恢复其中的全部日志。
 std::vector<LogMessage> deserializeLogBatch(
     std::span<const std::uint8_t> frame) {
     const FrameHeader header = parseFrameHeader(frame); // 解析出的批次帧头。
@@ -312,13 +337,21 @@ std::vector<LogMessage> deserializeLogBatch(
         messages.push_back(readLogRecord(frame, offset));
     }
 
+    for (std::size_t index = 1; index < messages.size(); ++index) {
+        if (messages[index].clientId != messages.front().clientId) {
+            throw ProtocolError("log batch contains multiple client ids");
+        }
+        if (messages[index].id <= messages[index - 1].id) {
+            throw ProtocolError("log batch ids must be strictly increasing");
+        }
+    }
+
     if (offset != frame.size()) {
         throw ProtocolError("log batch fields do not fill the payload");
     }
     return messages;
 }
 
-// 将 confirmedId 编码成固定 8 字节 Payload 的 ACK 帧。
 ByteBuffer serializeAck(std::uint64_t confirmedId) {
     ByteBuffer output; // 保存完整 ACK 协议帧。
     output.reserve(FrameHeaderSize + AckPayloadSize);
@@ -327,7 +360,6 @@ ByteBuffer serializeAck(std::uint64_t confirmedId) {
     return output;
 }
 
-// 校验 ACK 帧并恢复服务端确认的消息 ID。
 AckMessage deserializeAck(std::span<const std::uint8_t> frame) {
     const FrameHeader header = parseFrameHeader(frame); // 解析出的 ACK 帧头。
     if (header.type != MessageType::Ack) {
@@ -344,4 +376,4 @@ AckMessage deserializeAck(std::span<const std::uint8_t> frame) {
     };
 }
 
-} // namespace logbridge::protocol
+} // logbridge::protocol 命名空间

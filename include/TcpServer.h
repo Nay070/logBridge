@@ -44,4 +44,4 @@ private:
     std::uint16_t port_{};   // bind 成功后实际使用的端口号。
 };
 
-} // namespace logbridge
+} // logbridge 命名空间

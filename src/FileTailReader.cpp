@@ -5,16 +5,14 @@
 #include <stdexcept>
 #include <utility>
 
-// 保存日志文件路径，并拒绝空路径。
-// path 是调用者指定的日志文件路径。
-FileTailReader::FileTailReader(std::string path)
-    : path_(std::move(path)) {
+FileTailReader::FileTailReader(std::string path,
+                               std::uint64_t initialOffset)
+    : path_(std::move(path)), offset_(initialOffset) {
     if (path_.empty()) {
         throw std::invalid_argument("log file path cannot be empty");
     }
 }
 
-// 从 offset_ 开始读取新增字节，拆分并返回其中的完整日志行。
 std::vector<std::string> FileTailReader::readNewLines() {
     // file 表示本次打开的输入文件流；二进制模式可以避免系统转换换行符。
     std::ifstream file(path_, std::ios::binary);
@@ -93,12 +91,14 @@ std::vector<std::string> FileTailReader::readNewLines() {
     return lines;
 }
 
-// 返回当前文件读取偏移量，不修改读取器状态。
 std::uint64_t FileTailReader::offset() const noexcept {
     return offset_;
 }
 
-// 返回正在监听的文件路径，不复制字符串。
+std::uint64_t FileTailReader::committedOffset() const noexcept {
+    return offset_ - static_cast<std::uint64_t>(pending_.size());
+}
+
 const std::string &FileTailReader::path() const noexcept {
     return path_;
 }

@@ -25,7 +25,7 @@ void append(const std::filesystem::path& path, const std::string& content) {
     file << content;
 }
 
-} // namespace
+} // 匿名命名空间
 
 // 创建临时日志文件，依次验证增量读取、半行、CRLF 和文件截断。
 int main() {
@@ -46,6 +46,8 @@ int main() {
         const std::vector<std::string> firstRead = reader.readNewLines();
         require(firstRead == std::vector<std::string>{"first line"},
                 "first read should return only the complete line");
+        require(reader.committedOffset() == 11,
+                "checkpoint must stop before an incomplete line");
 
         // 补全上一轮留下的半行，并写入一条 CRLF 日志。
         append(path, " line\nwindows line\r\n");
@@ -57,6 +59,10 @@ int main() {
 
         require(reader.readNewLines().empty(),
                 "unchanged file should not return duplicate lines");
+
+        FileTailReader resumed(path.string(), reader.committedOffset());
+        require(resumed.readNewLines().empty(),
+                "restored reader must not duplicate complete lines");
 
         // 文件被截断后，读取器从新文件开头重新读取。
         {

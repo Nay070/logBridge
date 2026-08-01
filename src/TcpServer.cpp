@@ -22,9 +22,8 @@ void closeSocket(int& socketFd) noexcept {
     }
 }
 
-} // namespace
+} // 匿名命名空间
 
-// 创建 IPv4 监听 Socket，绑定 port 并开始监听连接。
 TcpServer::TcpServer(std::uint16_t port) {
     listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listenFd_ < 0) {
@@ -82,13 +81,11 @@ TcpServer::TcpServer(std::uint16_t port) {
     }
 }
 
-// 先关闭当前客户端，再关闭监听 Socket，释放所有网络资源。
 TcpServer::~TcpServer() {
     closeSocket(clientFd_);
     closeSocket(listenFd_);
 }
 
-// 阻塞等待客户端；如果旧连接仍存在，先关闭旧连接。
 void TcpServer::acceptClient() {
     closeSocket(clientFd_);
 
@@ -102,7 +99,6 @@ void TcpServer::acceptClient() {
     }
 }
 
-// 接收一个单日志协议帧并反序列化。
 std::optional<LogMessage> TcpServer::receiveLogMessage() const {
     if (clientFd_ < 0) {
         throw std::logic_error("no client has been accepted");
@@ -115,7 +111,6 @@ std::optional<LogMessage> TcpServer::receiveLogMessage() const {
     return protocol::deserializeLogMessage(*frame);
 }
 
-// 同时兼容旧的单日志帧和新的批次帧。
 std::optional<std::vector<LogMessage>>
 TcpServer::receiveLogBatch() const {
     if (clientFd_ < 0) {
@@ -141,7 +136,6 @@ TcpServer::receiveLogBatch() const {
     throw protocol::ProtocolError("expected log or log batch frame");
 }
 
-// 将服务端已经处理到的最大消息 ID 返回给客户端。
 void TcpServer::sendAck(std::uint64_t confirmedId) const {
     if (clientFd_ < 0) {
         throw std::logic_error("no client has been accepted");
@@ -152,9 +146,8 @@ void TcpServer::sendAck(std::uint64_t confirmedId) const {
     net::sendAll(clientFd_, frame);
 }
 
-// 返回 bind 后的实际端口；测试使用端口 0 时也能取得系统分配值。
 std::uint16_t TcpServer::port() const noexcept {
     return port_;
 }
 
-} // namespace logbridge
+} // logbridge 命名空间

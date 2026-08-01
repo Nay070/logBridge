@@ -69,7 +69,7 @@ void testClosedQueueFlush() {
             "drained closed queue must return an empty batch");
 }
 
-} // namespace
+} // 匿名命名空间
 
 // 运行阻塞队列的批量读取测试。
 int main() {

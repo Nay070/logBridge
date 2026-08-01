@@ -13,9 +13,10 @@ namespace logbridge::protocol {
 using ByteBuffer = std::vector<std::uint8_t>; // 保存网络帧原始字节的动态数组。
 
 inline constexpr std::uint32_t Magic = 0x4C474231; // 协议标识，对应 ASCII 字符串 "LGB1"。
-inline constexpr std::uint8_t Version = 1;         // 当前协议版本号。
+inline constexpr std::uint8_t Version = 2;         // 当前协议版本号。
 inline constexpr std::size_t FrameHeaderSize = 12; // 每个网络帧固定头部的字节数。
 
+inline constexpr std::uint32_t MaxClientIdLength = 128;          // 客户端 ID 允许的最大字节数。
 inline constexpr std::uint32_t MaxSourceLength = 4 * 1024;       // 日志来源允许的最大字节数。
 inline constexpr std::uint32_t MaxContentLength = 1024 * 1024;  // 日志正文允许的最大字节数。
 inline constexpr std::uint32_t MaxBatchMessageCount = 100;      // 一个批次允许包含的最大日志条数。
@@ -73,4 +74,4 @@ AckMessage deserializeAck(std::span<const std::uint8_t> frame);
 // header 至少包含 FrameHeaderSize 个字节；返回解析后的头部字段。
 FrameHeader parseFrameHeader(std::span<const std::uint8_t> header);
 
-} // namespace logbridge::protocol
+} // logbridge::protocol 命名空间
